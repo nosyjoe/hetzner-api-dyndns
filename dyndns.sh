@@ -3,7 +3,7 @@
 # v1.3
 
 # Initialize variables
-auth_api_token=""
+auth_api_token=${HETZNER_AUTH_API_TOKEN:-""}  # Use the environment variable if set
 zone_name=""
 zone_id=""
 record_name=""
@@ -15,10 +15,10 @@ record_id=""
 display_help() {
   cat <<EOF
 
-Usage: ./dyndns.sh -a <API Token> [ -z <Zone ID> | -Z <Zone Name> ] -r <Record ID> -n <Record Name>
+Usage: ./dyndns.sh [ -a <API Token> ] [ -z <Zone ID> | -Z <Zone Name> ] -r <Record ID> -n <Record Name>
 
 Parameters:
-  -a  - Auth API Token (required)
+  -a  - Auth API Token (optional, can be set via env var HETZNER_AUTH_API_TOKEN)
   -z  - Zone ID
   -Z  - Zone name
   -r  - Record ID
@@ -37,7 +37,7 @@ Requirements:
 
 Example:
   ./dyndns.sh -a your-api-token -z 98jFjsd8dh1GHasdf7a8hJG7 -r AHD82h347fGAF1 -n dyn
-  ./dyndns.sh -a your-api-token -Z example.com -n dyn -T AAAA
+  ./dyndns.sh -Z example.com -n dyn -T AAAA
 
 EOF
   exit 1
@@ -66,7 +66,7 @@ done
 
 # Check if required parameters are provided
 if [ -z "${auth_api_token}" ]; then
-  logger "Error" "No Auth API Token specified."
+  logger "Error" "No Auth API Token specified. Use -a <API Token> or set the HETZNER_AUTH_API_TOKEN environment variable."
   display_help
   exit 1
 fi
