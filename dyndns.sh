@@ -85,7 +85,7 @@ fi
 
 # Check if tools are installed
 for cmd in curl jq; do
-  if ! command -v "${cmd}" >/dev/null 2>&1; then
+  if ! command -v "${cmd}" > /dev/null 2>&1; then
     logger "Error" "The script requires '${cmd}' but it seems not to be installed."
     exit 1
   fi
