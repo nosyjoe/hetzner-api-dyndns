@@ -143,6 +143,6 @@ else
   response=$(api -X POST "https://api.hetzner.cloud/v1/zones/${zone_id}/rrsets/${record_name}/${record_type}/actions/set_records" \
     -d $'{"records": [{"value": "'${cur_pub_addr}'"}]}')
   update_code=$(http_code "${response}")
-  [[ "${update_code}" != "200" ]] && fail "HTTP ${update_code} - Unable to update record: \"${record_name}\""
+  [[ "${update_code}" != "200" && "${update_code}" != "201" ]] && fail "HTTP ${update_code} - Unable to update record: \"${record_name}\""
   logger Info "DNS record \"${record_name}\" updated successfully"
 fi
