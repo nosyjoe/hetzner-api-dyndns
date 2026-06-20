@@ -1,43 +1,41 @@
-#!/bin/sh
+#!/bin/bash
 # DynDNS Script for Hetzner DNS API by FarrowStrange
-# v1.3
+# v2.0
 
-# Initialize variables
-auth_api_token=${HETZNER_AUTH_API_TOKEN:-""}  # Use the environment variable if set
-zone_name=""
-zone_id=""
-record_name=""
-record_ttl="60"
-record_type="A"
-record_id=""
+auth_api_token=${HETZNER_AUTH_API_TOKEN:-''}
+zone_name=${HETZNER_ZONE_NAME:-''}
+zone_id=${HETZNER_ZONE_ID:-''}
+record_name=${HETZNER_RECORD_NAME:-''}
+record_ttl=${HETZNER_RECORD_TTL:-'60'}
+record_type=${HETZNER_RECORD_TYPE:-'A'}
+record_ip=${HETZNER_RECORD_IP:-''}
 
-# Function to display help
 display_help() {
   cat <<EOF
 
-Usage: ./dyndns.sh [ -a <API Token> ] [ -z <Zone ID> | -Z <Zone Name> ] -r <Record ID> -n <Record Name>
+exec: ./dyndns.sh [ -z <Zone ID> | -Z <Zone Name> ] -n <Record Name>
 
-Parameters:
+parameters:
   -a  - Auth API Token (optional, can be set via env var HETZNER_AUTH_API_TOKEN)
   -z  - Zone ID
   -Z  - Zone name
-  -r  - Record ID
   -n  - Record name
 
-Optional parameters:
+optional parameters:
+  -i  - IP address (skips auto-detection via ip.hetzner.com)
   -t  - TTL (Default: 60)
   -T  - Record type (Default: A)
 
-Help:
-  -h  - Show help 
+help:
+  -h  - Show Help
 
-Requirements:
+requirements:
   curl
   jq
 
-Example:
-  ./dyndns.sh -a your-api-token -z 98jFjsd8dh1GHasdf7a8hJG7 -r AHD82h347fGAF1 -n dyn
-  ./dyndns.sh -Z example.com -n dyn -T AAAA
+example:
+  .exec: ./dyndns.sh -z 98jFjsd8dh1GHasdf7a8hJG7 -n dyn
+  .exec: ./dyndns.sh -Z example.com -n dyn -T AAAA
 
 EOF
   exit 1
@@ -47,14 +45,22 @@ logger() {
   echo "${1}: Record_Name: ${record_name} : ${2}"
 }
 
-# Process command-line arguments
-while getopts ":a:z:Z:r:n:t:T:h" opt; do
+fail() {
+  logger Error "${1}"
+  exit 1
+}
+
+api()       { curl -s -w "\n%{http_code}" -H 'Content-Type: application/json' -H "Authorization: Bearer ${auth_api_token}" "$@"; }
+http_code() { echo "$1" | tail -n 1; }
+http_body() { echo "$1" | sed '$d'; }
+
+while getopts ":a:z:Z:n:i:t:T:h" opt; do
   case "$opt" in
     a  ) auth_api_token="${OPTARG}";;
     z  ) zone_id="${OPTARG}";;
     Z  ) zone_name="${OPTARG}";;
-    r  ) record_id="${OPTARG}";;
     n  ) record_name="${OPTARG}";;
+    i  ) record_ip="${OPTARG}";;
     t  ) record_ttl="${OPTARG}";;
     T  ) record_type="${OPTARG}";;
     h  ) display_help;;
@@ -64,118 +70,79 @@ while getopts ":a:z:Z:r:n:t:T:h" opt; do
   esac
 done
 
-# Check if required parameters are provided
-if [ -z "${auth_api_token}" ]; then
-  logger "Error" "No Auth API Token specified. Use -a <API Token> or set the HETZNER_AUTH_API_TOKEN environment variable."
-  display_help
-  exit 1
-fi
-
-if [ -z "${zone_id}" ] && [ -z "${zone_name}" ]; then
-  logger "Error" "Either Zone ID (-z) or Zone Name (-Z) must be provided."
-  display_help
-  exit 1
-fi
-
-if [ -z "${record_name}" ]; then
-  logger "Error" "Record name (-n) is required."
-  display_help
-  exit 1
-fi
-
-# Check if tools are installed
 for cmd in curl jq; do
-  if ! command -v "${cmd}" > /dev/null 2>&1; then
-    logger "Error" "The script requires '${cmd}' but it seems not to be installed."
-    exit 1
-  fi
+  command -v "${cmd}" &>/dev/null || fail "'${cmd}' is required but not installed."
 done
 
-# Fetch all zones using the API
+[[ -z "${auth_api_token}" ]] && fail "No Auth API Token specified."
+[[ -z "${record_name}" ]]    && fail "Missing option for record name: -n <Record Name>"
+
+# get all zones
 zone_info=$(curl -s --location \
-          "https://dns.hetzner.com/api/v1/zones" \
-          --header "Auth-API-Token: ${auth_api_token}")
+          "https://api.hetzner.cloud/v1/zones" \
+          --header "Authorization: Bearer ${auth_api_token}")
 
-# Check if either zone_id or zone_name is valid
-if [ -z "$(echo "${zone_info}" | jq --raw-output ".zones[] | select(.name==\"${zone_name}\") | .id")" ] && \
-   [ -z "$(echo "${zone_info}" | jq --raw-output ".zones[] | select(.id==\"${zone_id}\") | .name")" ]; then
-  logger "Error" "Could not find Zone ID. Check your inputs for -z (Zone ID) or -Z (Zone Name)."
-  exit 1
+# check if either zone_id or zone_name is correct
+if [[ -z "$(echo "${zone_info}" | jq --raw-output '.zones[] | select(.name=="'${zone_name}'") | .id')" && \
+      -z "$(echo "${zone_info}" | jq --raw-output '.zones[] | select(.id=="'${zone_id}'") | .name')" ]]; then
+  fail "Could not find Zone ID. Check your inputs of either -z <Zone ID> or -Z <Zone Name>."
 fi
 
-# Fetch zone_id if zone_name is provided
-if [ -z "${zone_id}" ]; then
-  zone_id=$(echo "${zone_info}" | jq --raw-output ".zones[] | select(.name==\"${zone_name}\") | .id")
-fi
+[[ -z "${zone_id}" ]]   && zone_id=$(echo "${zone_info}"   | jq --raw-output '.zones[] | select(.name=="'${zone_name}'") | .id')
+[[ -z "${zone_name}" ]] && zone_name=$(echo "${zone_info}" | jq --raw-output '.zones[] | select(.id=="'${zone_id}'") | .name')
 
-# Fetch zone_name if zone_id is provided
-if [ -z "${zone_name}" ]; then
-  zone_name=$(echo "${zone_info}" | jq --raw-output ".zones[] | select(.id==\"${zone_id}\") | .name")
-fi
+logger Info "Zone_ID: ${zone_id}"
+logger Info "Zone_Name: ${zone_name}"
 
-logger "Info" "Zone_ID: ${zone_id}"
-logger "Info" "Zone_Name: ${zone_name}"
-
-# Get current public IP address based on record type
-if [ "${record_type}" = "AAAA" ]; then
-  logger "Info" "Using IPv6 (AAAA record type)."
+# get current public ip address
+if [[ -n "${record_ip}" ]]; then
+  cur_pub_addr="${record_ip}"
+  logger Info "Using provided IP address: ${cur_pub_addr}"
+elif [[ "${record_type}" == "AAAA" ]]; then
+  logger Info "Using IPv6, because AAAA was set as record type."
   cur_pub_addr=$(curl -s6 https://ip.hetzner.com | grep -E '^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$')
-elif [ "${record_type}" = "A" ]; then
-  logger "Info" "Using IPv4 (A record type)."
+  [[ -z "${cur_pub_addr}" ]] && fail "It seems you don't have a IPv6 public address."
+  logger Info "Current public IP address: ${cur_pub_addr}"
+elif [[ "${record_type}" == "A" ]]; then
+  logger Info "Using IPv4, because A was set as record type."
   cur_pub_addr=$(curl -s4 https://ip.hetzner.com | grep -E '^([0-9]+(\.|$)){4}')
+  [[ -z "${cur_pub_addr}" ]] && fail "Apparently there is a problem in determining the public ip address."
+  logger Info "Current public IP address: ${cur_pub_addr}"
 else
-  logger "Error" "Only A or AAAA record types are supported."
-  exit 1
+  fail "Only record type \"A\" or \"AAAA\" are supported for DynDNS."
 fi
 
-if [ -z "${cur_pub_addr}" ]; then
-  logger "Error" "Unable to determine public IP address."
-  exit 1
-fi
+# check if record exists and get current value if so
+record_zone=$(api --request GET "https://api.hetzner.cloud/v1/zones/${zone_id}/rrsets/${record_name}/${record_type}")
+code=$(http_code "${record_zone}")
 
-logger "Info" "Current public IP address: ${cur_pub_addr}"
-
-# Fetch record ID if not provided
-if [ -z "${record_id}" ]; then
-  record_zone=$(curl -s --location \
-                 --request GET "https://dns.hetzner.com/api/v1/records?zone_id=${zone_id}" \
-                 --header "Auth-API-Token: ${auth_api_token}")
-  
-  record_id=$(echo "${record_zone}" | jq --raw-output ".records[] | select(.type==\"${record_type}\") | select(.name==\"${record_name}\") | .id")
-fi
-
-logger "Info" "Record_ID: ${record_id}"
-
-# Create or update the DNS record
-if [ -z "${record_id}" ]; then
-  logger "Info" "DNS record \"${record_name}\" does not exist. Creating a new record."
-  curl -s -X "POST" "https://dns.hetzner.com/api/v1/records" \
-       -H "Content-Type: application/json" \
-       -H "Auth-API-Token: ${auth_api_token}" \
-       -d "{
-          \"value\": \"${cur_pub_addr}\",
-          \"ttl\": ${record_ttl},
-          \"type\": \"${record_type}\",
-          \"name\": \"${record_name}\",
-          \"zone_id\": \"${zone_id}\"
-        }"
+if [[ "${code}" == "404" ]]; then
+  logger Info "DNS record \"${record_name}\" does not exist - will be created."
+  response=$(api -X POST "https://api.hetzner.cloud/v1/zones/${zone_id}/rrsets" \
+    -d $'{
+      "name": "'${record_name}'",
+      "type": "'${record_type}'",
+      "ttl": '${record_ttl}',
+      "records": [{"value": "'${cur_pub_addr}'"}],
+      "labels": {"environment": "dyndns"}
+    }')
+  create_code=$(http_code "${response}")
+  [[ "${create_code}" != "201" ]] && fail "HTTP ${create_code} - Unable to create record: \"${record_name}\""
+  logger Info "DNS record \"${record_name}\" created successfully"
+elif [[ "${code}" != "200" ]]; then
+  fail "HTTP ${code} - Aborting run to prevent multiple records."
 else
-  cur_dyn_addr=$(curl -s "https://dns.hetzner.com/api/v1/records/${record_id}" \
-                 -H "Auth-API-Token: ${auth_api_token}" | jq --raw-output '.record.value')
-  
-  if [ "${cur_pub_addr}" = "${cur_dyn_addr}" ]; then
-    logger "Info" "DNS record \"${record_name}\" is up-to-date. No changes needed."
-  else
-    logger "Info" "Updating DNS record \"${record_name}\"."
-    curl -s -X "PUT" "https://dns.hetzner.com/api/v1/records/${record_id}" \
-         -H "Content-Type: application/json" \
-         -H "Auth-API-Token: ${auth_api_token}" \
-         -d "{
-           \"value\": \"${cur_pub_addr}\",
-           \"ttl\": ${record_ttl},
-           \"type\": \"${record_type}\",
-           \"name\": \"${record_name}\",
-           \"zone_id\": \"${zone_id}\"
-         }"
+  cur_dyn_addr=$(http_body "${record_zone}" | jq --raw-output '.rrset.records[0].value')
+  logger Info "Currently set IP address: ${cur_dyn_addr}"
+  if [[ "${cur_pub_addr}" == "${cur_dyn_addr}" ]]; then
+    logger Info "DNS record \"${record_name}\" is up to date - nothing to do."
+    exit 0
   fi
+
+  logger Info "DNS record \"${record_name}\" is no longer valid - updating record"
+  response=$(api -X POST "https://api.hetzner.cloud/v1/zones/${zone_id}/rrsets/${record_name}/${record_type}/actions/set_records" \
+    -d $'{"records": [{"value": "'${cur_pub_addr}'"}]}')
+  update_code=$(http_code "${response}")
+  [[ "${update_code}" != "200" ]] && fail "HTTP ${update_code} - Unable to update record: \"${record_name}\""
+  logger Info "DNS record \"${record_name}\" updated successfully"
 fi
